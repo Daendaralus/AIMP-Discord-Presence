@@ -5,8 +5,8 @@
 #include "IUnknownInterface.h"
 
 #include "aimpRemote.h"
-#include "discord_rpc.h"
-
+//#include "discord_rpc.h"
+#include "discord.h"
 class Plugin : 
 	public IUnknownInterface<IAIMPPlugin>
 {

@@ -4,8 +4,8 @@
 #include <time.h>
 
 AIMPRemote* aimpRemote;
-DiscordRichPresence discordPresence;
-
+discord::Core* core = nullptr;
+long appid = 705094545645502574;
 HRESULT __declspec(dllexport) WINAPI AIMPPluginGetHeader(IAIMPPlugin** Header)
 {
 	*Header = new Plugin();
@@ -19,16 +19,6 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* Core)
 	{
 		return E_ABORT;
 	}
-
-	// Discord init
-	DiscordEventHandlers handlers = { 0 };
-	handlers.ready = this->DiscordReady;
-
-	Discord_Initialize(DISCORD_APPID, &handlers, 1, NULL);
-	discordPresence.smallImageKey = "aimp";
-	discordPresence.smallImageText = "AIMP";
-	discordPresence.largeImageKey = "defaultcover";
-	Discord_UpdatePresence(&discordPresence);
 
 	aimpRemote = new AIMPRemote();
 
@@ -45,13 +35,14 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* Core)
 
 HRESULT WINAPI Plugin::Finalize()
 {
-	Discord_Shutdown();
-
 	if (aimpRemote)
 	{
 		delete aimpRemote;
 	}
-
+	if (core)
+	{
+		delete core;
+	}
 	return S_OK;
 }
 
@@ -62,18 +53,38 @@ VOID Plugin::DiscordReady(const DiscordUser* connectedUser)
 
 VOID Plugin::UpdatePlayerState(INT AIMPRemote_State)
 {
-	if (AIMPRemote_State != AIMPREMOTE_PLAYER_STATE_STOPPED)
+	if (AIMPRemote_State == AIMPREMOTE_PLAYER_STATE_PLAYING)
 	{
+		if (!core)
+		{
+			//Hacky workaround since ClearActivity() doesn't fully clear the app presence - only the details. To get completely rid of the rich presence I have to call ~Core down below
+			auto result = discord::Core::Create(705094545645502574, DiscordCreateFlags_NoRequireDiscord, &core);
+			if (result != discord::Result::Ok)
+				core = nullptr;
+		}
+		
 		UpdateTrackInfo(&aimpRemote->AIMPGetTrackInfo());
 	}
 	else
 	{
-		Discord_ClearPresence();
+		if (core)
+		{
+			//core->ActivityManager().ClearActivity([](discord::Result result) {
+			//});
+			//Workaround as described above
+			core->~Core();
+			core = nullptr;
+		}
+		
 	}
 }
 
 VOID Plugin::UpdateTrackInfo(PAIMPTrackInfo AIMPRemote_TrackInfo)
 {
+	if (!core)
+	{
+		return;
+	}
 	{
 		std::size_t length = AIMPRemote_TrackInfo->Artist.length();
 		if (length >= 128) AIMPRemote_TrackInfo->Artist.replace(length - 3, length, "...");
@@ -89,48 +100,40 @@ VOID Plugin::UpdateTrackInfo(PAIMPTrackInfo AIMPRemote_TrackInfo)
 		if (length >= 128) AIMPRemote_TrackInfo->Album.replace(length - 3, length, "...");
 		else if (length == 1) AIMPRemote_TrackInfo->Album.append(" ");
 	}
-
-	discordPresence.details = AIMPRemote_TrackInfo->Title.c_str();
-	discordPresence.state = AIMPRemote_TrackInfo->Artist.c_str();
-	discordPresence.largeImageText = AIMPRemote_TrackInfo->Album.c_str();
-
-	discordPresence.startTimestamp = 0;
-	discordPresence.endTimestamp = 0;
-
+	discord::Activity activity{};
+	activity.SetType(discord::ActivityType::Listening);
+	activity.SetDetails(AIMPRemote_TrackInfo->Title.c_str());
+	activity.SetState(AIMPRemote_TrackInfo->Artist.c_str());
+	activity.GetAssets().SetLargeText(AIMPRemote_TrackInfo->Album.c_str());
+	activity.GetAssets().SetLargeImage("aimpicon");
+	activity.GetAssets().SetLargeText("Listening to music through AIMP");
 	if (aimpRemote->AIMPGetPropertyValue(AIMP_RA_PROPERTY_PLAYER_STATE) == AIMPREMOTE_PLAYER_STATE_PLAYING)
 	{
 		int Duration =
 			aimpRemote->AIMPGetPropertyValue(AIMP_RA_PROPERTY_PLAYER_DURATION) / 1000;
 		if (Duration != 0)
 		{
-			discordPresence.startTimestamp = time(0);
-			discordPresence.endTimestamp =
-				discordPresence.startTimestamp +
-				Duration -
-				aimpRemote->AIMPGetPropertyValue(AIMP_RA_PROPERTY_PLAYER_POSITION) / 1000;
+			activity.GetTimestamps().SetStart(time(0));
+			activity.GetTimestamps().SetEnd(time(0)+((time_t)Duration- aimpRemote->AIMPGetPropertyValue(AIMP_RA_PROPERTY_PLAYER_POSITION) / 1000));
 		}
-		discordPresence.smallImageKey = "aimp_play";
-	}
-	else
-	{
-		discordPresence.smallImageKey = "aimp_pause";
+
 	}
 
 	if (AIMPRemote_TrackInfo->FileName.compare(0, 7, "http://") == 0 || AIMPRemote_TrackInfo->FileName.compare(0, 8, "https://") == 0)
 	{
 		if (!AIMPRemote_TrackInfo->Album[0])
 		{
-			discordPresence.largeImageText = "Listening to URL";
+			activity.GetAssets().SetLargeText("Listening to URL");
 		}
 
-		discordPresence.largeImageKey = "aimp_radio";
 	}
-	else discordPresence.largeImageKey ="defaultcover";
+	core->ActivityManager().UpdateActivity(activity, [](discord::Result result) {
 
-	Discord_UpdatePresence(&discordPresence);
+	});
 }
 
 VOID Plugin::UpdateTrackPosition(PAIMPPosition AIMPRemote_Position)
 {
-	Discord_RunCallbacks();
+	if(core)
+		core->RunCallbacks();
 }

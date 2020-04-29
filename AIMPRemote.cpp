@@ -79,7 +79,7 @@ bool AIMPRemote::AIMPSetRemoteHandle(const HWND* Value)
 		WNDCLASSEX wx = {};
 		wx.cbSize = sizeof(WNDCLASSEX);
 		wx.lpfnWndProc = WMAIMPNotify;
-		wx.hInstance = GetModuleHandle(NULL);
+		wx.hInstance = GetModuleHandle(NULL); 
 		wx.lpszClassName = AIMPRemoteClassName;
 		if (RegisterClassEx(&wx))
 		{
